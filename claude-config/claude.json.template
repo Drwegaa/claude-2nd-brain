@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "vault-search": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@bitbonsai/mcpvault", "{{VAULT_PATH}}"],
+      "env": {}
+    },
+    "obsidian": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "obsidian-mcp", "{{VAULT_PATH}}"],
+      "env": {}
+    }
+  }
+}

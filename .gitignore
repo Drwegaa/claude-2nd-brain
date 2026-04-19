@@ -1,0 +1,22 @@
+# Ignore actual vault content (personal notes)
+vault-template/00-Inbox/*
+vault-template/01-Projects/*
+vault-template/02-Decisions/*
+vault-template/03-Daily/*
+vault-template/04-Resources/topics/*
+vault-template/04-Resources/code-topology/*
+vault-template/05-People/*
+vault-template/06-Personal/*
+vault-template/07-Sessions/*
+vault-template/08-Archive/*
+
+# Keep .gitkeep placeholders
+!**/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Graphify intermediate files
+graphify-out/
+*.graphify_python

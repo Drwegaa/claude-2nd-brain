@@ -1,0 +1,33 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p {{VAULT_PATH}}/03-Daily && echo \"$(date '+%Y-%m-%d %H:%M') — session ended\" >> {{VAULT_PATH}}/03-Daily/.session-log.txt",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "TODAY=$(date '+%Y-%m-%d'); DAILY=\"{{VAULT_PATH}}/03-Daily/$TODAY.md\"; MSGS=\"\"; if [ ! -f \"$DAILY\" ]; then MSGS=\"$MSGS\\n- Write session summary to vault: 03-Daily/$TODAY.md (use obsidian MCP)\"; fi; if [ -n \"$MSGS\" ]; then echo -e \"Auto-save needed for $TODAY:$MSGS\"; exit 2; fi; exit 0",
+            "asyncRewake": true,
+            "statusMessage": "Checking vault for today's daily note..."
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "CRITICAL: The Claude Code context is about to be compacted and conversation history will be lost. You MUST immediately write a comprehensive session summary to the Obsidian vault BEFORE compaction occurs. Use the obsidian MCP server to write a note to: {{VAULT_PATH}}/03-Daily/YYYY-MM-DD.md (replace with today's actual date). The summary must include: 1) What was built or discussed this session, 2) All key decisions made with reasoning, 3) All action items identified, 4) Current status. Also write any major decisions to {{VAULT_PATH}}/02-Decisions/YYYY-MM-DD-[topic].md. This is your last chance to preserve this context — do it now.",
+            "timeout": 60,
+            "statusMessage": "Auto-saving session to vault before compaction..."
+          }
+        ]
+      }
+    ]
+  }
+}

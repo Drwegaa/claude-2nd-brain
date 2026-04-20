@@ -7,14 +7,14 @@ Clear-Host
 
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════════════════╗"
-Write-Host "║       Claude 2nd Brain — Setup Wizard v1.0              ║"
+Write-Host "║       Claude 2nd Brain — Setup Wizard v1.1              ║"
 Write-Host "║   Obsidian + Claude Code + Graphify on your machine     ║"
 Write-Host "╠══════════════════════════════════════════════════════════╣"
 Write-Host "║  This script will:                                       ║"
 Write-Host "║  Step 1 — Ask you 4 questions                           ║"
 Write-Host "║  Step 2 — Create your Obsidian vault folder structure   ║"
-Write-Host "║  Step 3 — Register 2 MCP servers (obsidian + search)    ║"
-Write-Host "║  Step 4 — Add hooks to Claude Code (auto session-save)  ║"
+Write-Host "║  Step 3 — Register 1 MCP server (vault-search)          ║"
+Write-Host "║  Step 4 — Install vault-autosave + Stop hook            ║"
 Write-Host "║  Step 5 — Install the Graphify skill                    ║"
 Write-Host "║  Step 6 — Final instructions                            ║"
 Write-Host "║                                                          ║"
@@ -22,6 +22,8 @@ Write-Host "║  Prerequisites:                                          ║"
 Write-Host "║  ✓ Claude Code  (claude --version)                      ║"
 Write-Host "║  ✓ Node.js      (node --version)                        ║"
 Write-Host "║  ✓ Python 3.8+  (python --version)                     ║"
+Write-Host "║  ✓ Git          (git --version)                         ║"
+Write-Host "║  ✓ Git Bash     (for the Stop hook)                     ║"
 Write-Host "║  ✓ Obsidian     (obsidian.md/download)                  ║"
 Write-Host "║                                                          ║"
 Write-Host "║  Nothing happens until you confirm each step.           ║"
@@ -106,11 +108,14 @@ Write-Host ""
 
 # ── STEP 3: MCP Servers ──────────────────────────────────────────
 
-Write-Host "STEP 3 OF 6 — Register MCP servers" -ForegroundColor White
+Write-Host "STEP 3 OF 6 — Register MCP server" -ForegroundColor White
 Write-Host "─────────────────────────────────────────────────────────"
 Write-Host "Will register in ~\.claude.json:"
-Write-Host "  obsidian-mcp        — read/write notes in your vault"
-Write-Host "  @bitbonsai/mcpvault — full-text search across vault"
+Write-Host "  @bitbonsai/mcpvault — full-text BM25 search across vault"
+Write-Host ""
+Write-Host "Note: obsidian-mcp is intentionally NOT installed. It re-indexes the"
+Write-Host "entire vault on every call and freezes sessions on large vaults."
+Write-Host "Vault writes use Claude Code's native Write/Edit/Read tools instead."
 Write-Host ""
 $confirm = Read-Host "Proceed? (y/n)"
 
@@ -130,50 +135,82 @@ cfg['mcpServers']['vault-search'] = {
     'type': 'stdio', 'command': 'npx',
     'args': ['-y', '@bitbonsai/mcpvault', vault_path], 'env': {}
 }
-cfg['mcpServers']['obsidian'] = {
-    'type': 'stdio', 'command': 'npx',
-    'args': ['-y', 'obsidian-mcp', vault_path], 'env': {}
-}
+# Remove obsidian-mcp if it's left over from a v1.0 install
+cfg['mcpServers'].pop('obsidian', None)
 with open(claude_json, 'w') as f:
     json.dump(cfg, f, indent=2)
-print('Registered in .claude.json')
+print('Registered vault-search in .claude.json')
+print('Removed obsidian-mcp if present')
 "@
     & $pythonCmd -c $pyScript
-    Write-Host "✓ MCP servers registered" -ForegroundColor Green
+    Write-Host "✓ vault-search MCP registered" -ForegroundColor Green
 }
 
 Write-Host ""
 
-# ── STEP 4: Hooks ────────────────────────────────────────────────
+# ── STEP 4: Autosave script + Stop hook ──────────────────────────
 
-Write-Host "STEP 4 OF 6 — Add Claude Code hooks" -ForegroundColor White
+Write-Host "STEP 4 OF 6 — Install vault-autosave + Stop hook" -ForegroundColor White
 Write-Host "─────────────────────────────────────────────────────────"
-Write-Host "Will add to ~\.claude\settings.json (non-destructive):"
-Write-Host "  Stop hook   — prompts Claude to write today's daily note"
-Write-Host "  PreCompact  — saves session summary before context compacts"
+Write-Host "Will install:"
+Write-Host "  ~\.claude\scripts\vault-autosave.sh"
+Write-Host "    — Runs on every session end: git pull → commit → push"
+Write-Host "    — Silent if vault isn't a git repo yet (safe to install early)"
+Write-Host "  Stop + PreCompact hooks in ~\.claude\settings.json"
 Write-Host ""
-Write-Host "Note: The Stop hook uses bash commands. On Windows this requires"
-Write-Host "Git Bash or WSL. The PreCompact hook works on all platforms."
+Write-Host "Note: the autosave script is bash. On Windows it runs via Git Bash."
+Write-Host "Make sure Git for Windows is installed (includes Git Bash)."
+Write-Host ""
+Write-Host "To actually push to GitHub you'll need to:"
+Write-Host "  (a) cd $VaultPath ; git init"
+Write-Host "  (b) Create a private repo on GitHub"
+Write-Host "  (c) git remote add origin <url> ; git push -u origin main"
+Write-Host "Until then the hook runs silently on every session end (no-op)."
 Write-Host ""
 $confirm = Read-Host "Proceed? (y/n)"
 
 if ($confirm -eq "y") {
-    $claudeDir = "$env:USERPROFILE\.claude"
-    if (-not (Test-Path $claudeDir)) { New-Item -ItemType Directory -Path $claudeDir | Out-Null }
+    $claudeDir   = "$env:USERPROFILE\.claude"
+    $scriptsDir  = "$claudeDir\scripts"
+    if (-not (Test-Path $claudeDir))  { New-Item -ItemType Directory -Path $claudeDir  | Out-Null }
+    if (-not (Test-Path $scriptsDir)) { New-Item -ItemType Directory -Path $scriptsDir | Out-Null }
+
+    # Install vault-autosave.sh with {{VAULT_PATH}} substituted.
+    # Bash-on-Windows expects POSIX paths. Convert C:\Users\... to /c/Users/...
+    $posixVault = $VaultPath -replace '^([A-Za-z]):', '/$1' -replace '\\', '/'
+    $posixVault = $posixVault.ToLower().Substring(0,2) + $posixVault.Substring(2)
+    $autosaveTemplate = Get-Content "$ScriptDir\claude-config\scripts\vault-autosave.sh" -Raw
+    $autosaveScript   = $autosaveTemplate.Replace("{{VAULT_PATH}}", $posixVault)
+    # Write as UTF8 without BOM and with LF line endings for bash compatibility
+    $autosaveScript = $autosaveScript -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText("$scriptsDir\vault-autosave.sh", $autosaveScript, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "✓ vault-autosave.sh installed" -ForegroundColor Green
+
     $settingsPath = "$claudeDir\settings.json"
     if (-not (Test-Path $settingsPath)) { Set-Content $settingsPath "{}" }
 
     $templatePath = "$ScriptDir\claude-config\settings.json.template"
     $pythonCmd = if (Get-Command python -ErrorAction SilentlyContinue) { "python" } else { "python3" }
 
+    # For the hook command strings, use POSIX paths so Git Bash can exec them.
+    $posixHome = "$env:USERPROFILE" -replace '^([A-Za-z]):', '/$1' -replace '\\', '/'
+    $posixHome = $posixHome.ToLower().Substring(0,2) + $posixHome.Substring(2)
+    $posixScripts = "$posixHome/.claude/scripts"
+
     $pyScript = @"
 import json, os
-vault_path = r'$VaultPath'
+vault_path   = r'$posixVault'
+scripts_dir  = r'$posixScripts'
+user_home    = r'$posixHome'
 template_path = r'$templatePath'
 settings_path = r'$settingsPath'
 
 with open(template_path, 'r', encoding='utf-8') as f:
-    template_str = f.read().replace('{{VAULT_PATH}}', vault_path)
+    template_str = f.read()
+template_str = (template_str
+                .replace('{{VAULT_PATH}}', vault_path)
+                .replace('{{SCRIPTS_DIR}}', scripts_dir)
+                .replace('{{HOME}}', user_home))
 template = json.loads(template_str)
 
 with open(settings_path, 'r', encoding='utf-8') as f:
@@ -200,7 +237,7 @@ with open(settings_path, 'w', encoding='utf-8') as f:
 print('Hooks merged into settings.json')
 "@
     & $pythonCmd -c $pyScript
-    Write-Host "✓ Hooks added to Claude Code" -ForegroundColor Green
+    Write-Host "✓ Stop + PreCompact hooks installed" -ForegroundColor Green
 }
 
 Write-Host ""
@@ -228,15 +265,22 @@ Write-Host ""
 Write-Host "STEP 6 OF 6 — You're ready" -ForegroundColor White
 Write-Host "─────────────────────────────────────────────────────────"
 Write-Host "✓ Vault:     $VaultPath" -ForegroundColor Green
-Write-Host "✓ MCP:       obsidian-mcp + vault-search registered" -ForegroundColor Green
+Write-Host "✓ MCP:       vault-search registered (obsidian-mcp removed)" -ForegroundColor Green
+Write-Host "✓ Autosave:  ~\.claude\scripts\vault-autosave.sh" -ForegroundColor Green
 Write-Host "✓ Hooks:     Stop + PreCompact added to Claude Code" -ForegroundColor Green
 Write-Host "✓ Graphify:  /graphify skill installed" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Open Obsidian -> 'Open folder as vault' -> pick $VaultPath"
-Write-Host "  2. Open Claude Code in any terminal"
-Write-Host "  3. Sessions auto-save to 03-Daily/ when you close Claude Code"
-Write-Host "  4. Run /graphify <folder> to map any project to your vault"
+Write-Host "  2. (Optional, to enable GitHub auto-push):"
+Write-Host "     cd $VaultPath"
+Write-Host "     git init ; git add -A ; git commit -m 'initial vault'"
+Write-Host "     # create a private repo at github.com/new"
+Write-Host "     git remote add origin <your-repo-url>"
+Write-Host "     git push -u origin main"
+Write-Host "  3. Open Claude Code in any terminal"
+Write-Host "  4. Sessions auto-save (and auto-push, once git is wired) when you close Claude Code"
+Write-Host "  5. Run /graphify <folder> to map any project to your vault"
 if ($CodePath) {
     Write-Host ""
     Write-Host "  Your code project: $CodePath"

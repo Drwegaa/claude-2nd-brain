@@ -13,14 +13,14 @@ clear
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║       Claude 2nd Brain — Setup Wizard v1.0              ║"
+echo "║       Claude 2nd Brain — Setup Wizard v1.1              ║"
 echo "║   Obsidian + Claude Code + Graphify on your machine     ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 echo "║  This script will:                                       ║"
 echo "║  Step 1 — Ask you 4 questions                           ║"
 echo "║  Step 2 — Create your Obsidian vault folder structure   ║"
-echo "║  Step 3 — Register 2 MCP servers (obsidian + search)    ║"
-echo "║  Step 4 — Add hooks to Claude Code (auto session-save)  ║"
+echo "║  Step 3 — Register 1 MCP server (vault-search)          ║"
+echo "║  Step 4 — Install vault-autosave + Stop hook            ║"
 echo "║  Step 5 — Install the Graphify skill                    ║"
 echo "║  Step 6 — Final instructions                            ║"
 echo "║                                                          ║"
@@ -28,6 +28,7 @@ echo "║  Prerequisites:                                          ║"
 echo "║  ✓ Claude Code  (claude --version)                      ║"
 echo "║  ✓ Node.js      (node --version)                        ║"
 echo "║  ✓ Python 3.8+  (python3 --version)                    ║"
+echo "║  ✓ Git          (git --version)                         ║"
 echo "║  ✓ Obsidian     (obsidian.md/download)                  ║"
 echo "║                                                          ║"
 echo "║  Nothing happens until you confirm each step.           ║"
@@ -118,12 +119,14 @@ echo ""
 
 # ── STEP 3: MCP Servers ──────────────────────────────────────────
 
-echo -e "${BOLD}STEP 3 OF 6 — Register MCP servers${NC}"
+echo -e "${BOLD}STEP 3 OF 6 — Register MCP server${NC}"
 echo "─────────────────────────────────────────────────────────"
 echo "Will register in ~/.claude.json:"
-echo "  obsidian-mcp        — read/write notes in your vault"
-echo "  @bitbonsai/mcpvault — full-text search across vault"
-echo "Both are open source, free, no account required."
+echo "  @bitbonsai/mcpvault — full-text BM25 search across vault"
+echo ""
+echo "Note: obsidian-mcp is intentionally NOT installed. It re-indexes the"
+echo "entire vault on every call and freezes sessions on large vaults."
+echo "Vault writes use Claude Code's native Write/Edit/Read tools instead."
 echo ""
 read -rp "Proceed? (y/n): " confirm
 
@@ -153,45 +156,71 @@ cfg["mcpServers"]["vault-search"] = {
     "type": "stdio", "command": "npx",
     "args": ["-y", "@bitbonsai/mcpvault", vault_path], "env": {}
 }
-cfg["mcpServers"]["obsidian"] = {
-    "type": "stdio", "command": "npx",
-    "args": ["-y", "obsidian-mcp", vault_path], "env": {}
-}
+# Explicitly remove obsidian-mcp if it's left over from a v1.0 install.
+cfg["mcpServers"].pop("obsidian", None)
 
 with open(claude_json, "w") as f:
     json.dump(cfg, f, indent=2)
-print("Registered in ~/.claude.json")
+print("Registered vault-search in ~/.claude.json")
+print("Removed obsidian-mcp if it was present")
 PYEOF
 
-  echo -e "${GREEN}✓ MCP servers registered${NC}"
+  echo -e "${GREEN}✓ vault-search MCP registered${NC}"
 fi
 
 echo ""
 
-# ── STEP 4: Hooks ────────────────────────────────────────────────
+# ── STEP 4: Autosave script + Stop hook ──────────────────────────
 
-echo -e "${BOLD}STEP 4 OF 6 — Add Claude Code hooks${NC}"
+echo -e "${BOLD}STEP 4 OF 6 — Install vault-autosave + Stop hook${NC}"
 echo "─────────────────────────────────────────────────────────"
-echo "Will add to ~/.claude/settings.json (non-destructive):"
-echo "  Stop hook     — prompts Claude to write today's daily note"
-echo "  PreCompact    — saves session summary before context compacts"
+echo "Will install:"
+echo "  ~/.claude/scripts/vault-autosave.sh"
+echo "    — Runs on every session end: git pull → commit → push"
+echo "    — Silent if vault isn't a git repo yet (safe to install early)"
+echo "  Stop + PreCompact hooks in ~/.claude/settings.json"
+echo ""
+echo "To actually push to GitHub you'll need to:"
+echo "  (a) cd $VAULT_PATH && git init"
+echo "  (b) Create a private repo on GitHub"
+echo "  (c) git remote add origin <url> && git push -u origin main"
+echo "Until then the hook runs silently on every session end (no-op)."
 echo ""
 read -rp "Proceed? (y/n): " confirm
 
 if [ "$confirm" = "y" ]; then
   mkdir -p "$HOME/.claude"
+  mkdir -p "$HOME/.claude/scripts"
   [ ! -f "$HOME/.claude/settings.json" ] && echo '{}' > "$HOME/.claude/settings.json"
 
-  VAULT_PATH="$VAULT_PATH" SCRIPT_DIR="$SCRIPT_DIR" python3 - <<'PYEOF'
+  # Install vault-autosave.sh with {{VAULT_PATH}} substituted
+  sed -e "s|{{VAULT_PATH}}|$VAULT_PATH|g" \
+      "$SCRIPT_DIR/claude-config/scripts/vault-autosave.sh" \
+      > "$HOME/.claude/scripts/vault-autosave.sh"
+  chmod +x "$HOME/.claude/scripts/vault-autosave.sh"
+  echo -e "${GREEN}✓ vault-autosave.sh installed${NC}"
+
+  # Merge Stop + PreCompact hooks (non-destructive)
+  VAULT_PATH="$VAULT_PATH" \
+  SCRIPTS_DIR="$HOME/.claude/scripts" \
+  USER_HOME="$HOME" \
+  SCRIPT_DIR="$SCRIPT_DIR" python3 - <<'PYEOF'
 import json, os
 
-vault_path = os.environ["VAULT_PATH"]
-script_dir = os.environ["SCRIPT_DIR"]
+vault_path  = os.environ["VAULT_PATH"]
+scripts_dir = os.environ["SCRIPTS_DIR"]
+user_home   = os.environ["USER_HOME"]
+script_dir  = os.environ["SCRIPT_DIR"]
+
 template_path = os.path.join(script_dir, "claude-config", "settings.json.template")
 settings_path = os.path.expanduser("~/.claude/settings.json")
 
 with open(template_path, "r") as f:
-    template_str = f.read().replace("{{VAULT_PATH}}", vault_path)
+    template_str = f.read()
+template_str = (template_str
+                .replace("{{VAULT_PATH}}", vault_path)
+                .replace("{{SCRIPTS_DIR}}", scripts_dir)
+                .replace("{{HOME}}", user_home))
 template = json.loads(template_str)
 
 with open(settings_path, "r") as f:
@@ -219,7 +248,7 @@ with open(settings_path, "w") as f:
 print("Hooks merged into ~/.claude/settings.json")
 PYEOF
 
-  echo -e "${GREEN}✓ Hooks added to Claude Code${NC}"
+  echo -e "${GREEN}✓ Stop + PreCompact hooks installed${NC}"
 fi
 
 echo ""
@@ -246,15 +275,22 @@ echo ""
 echo -e "${BOLD}STEP 6 OF 6 — You're ready${NC}"
 echo "─────────────────────────────────────────────────────────"
 echo -e "${GREEN}✓ Vault:      $VAULT_PATH${NC}"
-echo -e "${GREEN}✓ MCP:        obsidian-mcp + vault-search registered${NC}"
+echo -e "${GREEN}✓ MCP:        vault-search registered (obsidian-mcp removed)${NC}"
+echo -e "${GREEN}✓ Autosave:   ~/.claude/scripts/vault-autosave.sh${NC}"
 echo -e "${GREEN}✓ Hooks:      Stop + PreCompact added to Claude Code${NC}"
 echo -e "${GREEN}✓ Graphify:   /graphify skill installed${NC}"
 echo ""
 echo "Next steps:"
 echo "  1. Open Obsidian → 'Open folder as vault' → pick $VAULT_PATH"
-echo "  2. Open Claude Code in any terminal"
-echo "  3. Sessions auto-save to 03-Daily/ when you close Claude Code"
-echo "  4. Run /graphify <folder> to map any project to your vault"
+echo "  2. (Optional, to enable GitHub auto-push):"
+echo "     cd $VAULT_PATH"
+echo "     git init && git add -A && git commit -m 'initial vault'"
+echo "     # create a private repo at github.com/new"
+echo "     git remote add origin <your-repo-url>"
+echo "     git push -u origin main"
+echo "  3. Open Claude Code in any terminal"
+echo "  4. Sessions auto-save (and auto-push, once git is wired) when you close Claude Code"
+echo "  5. Run /graphify <folder> to map any project to your vault"
 if [ -n "$CODE_PATH" ]; then
   echo ""
   echo "  Your code project: $CODE_PATH"

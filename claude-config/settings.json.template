@@ -7,6 +7,11 @@
             "type": "command",
             "command": "mkdir -p {{VAULT_PATH}}/03-Daily && echo \"$(date '+%Y-%m-%d %H:%M') — session ended\" >> {{VAULT_PATH}}/03-Daily/.session-log.txt",
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "mkdir -p {{HOME}}/.claude/debug && {{SCRIPTS_DIR}}/vault-autosave.sh >> {{HOME}}/.claude/debug/vault-autosave.log 2>&1",
+            "async": true
           }
         ]
       }
@@ -16,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Context compacting — run /save-session to preserve to Obsidian'",
+            "command": "echo 'Context compacting — run /save-session if you want a rich capture. Stop hook will autosave either way.'",
             "async": true
           }
         ]
